@@ -7,12 +7,12 @@ import (
 	"log"
 	"net/http"
 	"onlinetest/auth/models"
-	"os"
+	"onlinetest/database"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -20,58 +20,10 @@ import (
 // var client *mongo.Client
 // var userCollection *mongo.Collection
 
-func initMongoDB() (*mongo.Client, *mongo.Collection, error) {
-	// Load sensitive information from environment variables
-	os.Setenv("DB_URI", "mongodb+srv://VictoriaSecretsPreS:columbus@cluster0.yikox0z.mongodb.net/?retryWrites=true&w=majority")
-	os.Setenv("DB_NAME", "<dbname>")
-
-	dbURI := os.Getenv("DB_URI")
-	dbName := os.Getenv("DB_NAME")
-	if dbURI == "" || dbName == "" {
-		return nil, nil, fmt.Errorf("DB_URI and DB_NAME environment variables are required")
-	}
-
-	// Connect to MongoDB
-	opts := options.Client().ApplyURI(dbURI)
-	client, err := mongo.Connect(context.Background(), opts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error connecting to MongoDB: %v", err)
-	}
-
-	userCollection := client.Database(dbName).Collection("users")
-	if userCollection == nil {
-		return nil, nil, fmt.Errorf("failed to initialize user collection")
-	}
-
-	return client, userCollection, nil
-}
-
 func Register(w http.ResponseWriter, r *http.Request) {
-	// // Load sensitive information from environment variables
-	// os.Setenv("DB_URI", "mongodb+srv://VictoriaSecretsPreS:columbus@cluster0.yikox0z.mongodb.net/?retryWrites=true&w=majority")
-	// os.Setenv("DB_NAME", "<dbname>")
-
-	// dbURI := os.Getenv("DB_URI")
-	// dbName := os.Getenv("DB_NAME")
-	// if dbURI == "" || dbName == "" {
-	// 	log.Fatal("DB_URI and DB_NAME environment variables are required")
-	// }
-
-	// // Connect to MongoDB
-	// opts := options.Client().ApplyURI(dbURI)
-	// client, err := mongo.Connect(context.Background(), opts)
-	// if err != nil {
-	// 	log.Fatalf("Error connecting to MongoDB: %v", err)
-	// }
-	// defer client.Disconnect(context.Background())
-
-	// userCollection = client.Database(dbName).Collection("users")
-	// if userCollection == nil {
-	// 	log.Fatal("Failed to initialize user collections")
-	// }
 
 	//calling the mongodb init function
-	client, userCollection, err := initMongoDB()
+	client, userCollection, err := database.InitMongoDB("mongodb://localhost:27017", "auth", "users")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -96,6 +48,76 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	err = u.Validate()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check if the user with the provided email already exists in the database
+	// existingUser := models.User{}
+	// err = userCollection.FindOne(context.Background(), bson.M{"email": u.Email}).Decode(&existingUser)
+	// if err == nil {
+	// 	// User with the same email already exists, return an error
+	// 	http.Error(w, "User with this email already exists", http.StatusConflict)
+	// 	return
+	// } else if err != mongo.ErrNoDocuments {
+	// 	// Some other error occurred
+	// 	http.Error(w, "Internal server error", http.StatusInternalServerError)
+	// 	return
+	// }
+	// err = userCollection.FindOne(context.Background(), bson.M{"mobile": u.Mobile}).Decode(&existingUser)
+	// if err == nil {
+	// 	// User with the same email already exists, return an error
+	// 	http.Error(w, "User with this Mobile already exists", http.StatusConflict)
+	// 	return
+	// } else if err != mongo.ErrNoDocuments {
+	// 	// Some other error occurred
+	// 	http.Error(w, "Internal server error", http.StatusInternalServerError)
+	// 	return
+	// }
+	// Create a WaitGroup to wait for Goroutines to finish
+	var wg sync.WaitGroup
+
+	// Create a channel to collect errors from Goroutines
+	errCh := make(chan error, 2)
+
+	// Use Goroutines to perform MongoDB operations concurrently
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+
+		// Check if the user with the provided email already exists
+		err := userCollection.FindOne(context.Background(), bson.M{"email": u.Email}).Err()
+		if err == nil {
+			// User with the same email already exists
+			errCh <- fmt.Errorf("user with this email already exists")
+		} else if err != mongo.ErrNoDocuments {
+			// Some other error occurred
+			errCh <- fmt.Errorf("internal server error")
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		// Check if the user with the provided mobile already exists
+		err := userCollection.FindOne(context.Background(), bson.M{"mobile": u.Mobile}).Err()
+		if err == nil {
+			// User with the same mobile already exists
+			errCh <- fmt.Errorf("user with this Mobile already exists")
+		} else if err != mongo.ErrNoDocuments {
+			// Some other error occurred
+			errCh <- fmt.Errorf("internal server error")
+		}
+	}()
+
+	// Waiting for Goroutines to finish
+	wg.Wait()
+
+	// Closing the error channel so that it indicates that all Goroutines are done
+	close(errCh)
+
+	// Check for errors from Goroutines
+	for err := range errCh {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
@@ -130,7 +152,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 func Login(w http.ResponseWriter, r *http.Request) {
 	// Calling the MongoDB init function
-	client, userCollection, err := initMongoDB()
+	client, userCollection, err := database.InitMongoDB("mongodb://localhost:27017", "auth", "users")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -156,30 +178,80 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	email := formData.Email
 	password := formData.Password
 
-	// Check if the user with the provided email exists in the database
-	u := new(models.User)
-	err = userCollection.FindOne(context.Background(), bson.M{"email": email}).Decode(u)
+	// // Check if the user with the provided email exists in the database
+	// u := new(models.User)
+	// err = userCollection.FindOne(context.Background(), bson.M{"email": email}).Decode(u)
 
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			// User not found in the database, return an appropriate message
-			log.Printf("Error finding user: %v", err)
-			http.Error(w, "User not found. Please register first.", http.StatusUnauthorized)
-			return
-		} else {
-			// Some other error occurred
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+	// if err != nil {
+	// 	if err == mongo.ErrNoDocuments {
+	// 		// User not found in the database, return an appropriate message
+	// 		log.Printf("Error finding user: %v", err)
+	// 		http.Error(w, "User not found. Please register first.", http.StatusUnauthorized)
+	// 		return
+	// 	} else {
+	// 		// Some other error occurred
+	// 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	// 		return
+	// 	}
+	// }
+
+	// // Compare the hashed password with the password entered
+	// err = bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
+	// if err != nil {
+	// 	// Passwords don't match, return an appropriate message
+	// 	http.Error(w, "Invalid Username Or Password", http.StatusUnauthorized)
+	// 	return
+	// }
+
+	// if u.IsAdmin {
+	// 	// Admin functionality
+	// 	fmt.Fprintln(w, "Admin Authentication Successful")
+	// 	// You can add admin-specific logic here
+	// } else {
+	// 	// Normal user functionality
+	// 	fmt.Fprintln(w, "User Authentication Successful")
+	// 	// You can add user-specific logic here
+	// }
+	// Use Goroutines to perform MongoDB operations concurrently
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// Check if the user with the provided email exists in the database
+		u := new(models.User)
+		err := userCollection.FindOne(context.Background(), bson.M{"email": email}).Decode(u)
+
+		if err != nil {
+			if err == mongo.ErrNoDocuments {
+				// User not found in the database
+				log.Printf("Error finding user: %v", err)
+				http.Error(w, "User not found. Please register first.", http.StatusUnauthorized)
+				return
+			} else {
+				// Some other error occurred
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// Comparing the hashed password with the password entered
+		err = bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
+		if err != nil {
+			// Passwords don't match
+			http.Error(w, "Invalid Username Or Password", http.StatusUnauthorized)
 			return
 		}
-	}
 
-	// Compare the hashed password with the password entered
-	err = bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
-	if err != nil {
-		// Passwords don't match, return an appropriate message
-		http.Error(w, "Invalid Username Or Password", http.StatusUnauthorized)
-		return
-	}
+		if u.IsAdmin {
+			// Admin access
+			fmt.Fprintln(w, "Admin Authentication Successful")
+		} else {
+			// Normal user
+			fmt.Fprintln(w, "User Authentication Successful")
+		}
+	}()
 
-	fmt.Fprintln(w, "Authentication Successful")
+	// Waiting for Goroutines to finish
+	wg.Wait()
 }

@@ -5,48 +5,44 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"onlinetest/auth/handlers"
+
+	admin "onlinetest/admin/handlers"
+	auth "onlinetest/auth/handlers"
+	"onlinetest/middleware"
+	normal "onlinetest/normaluser/handlers"
 
 	"github.com/gorilla/mux"
 )
 
-// var (
-// 	PORT string
-// 	//logger *log.Logger
-// )
-
-// func main() {
-
-// 	// flag.StringVar(&PORT, "port", "20200", "--port=20200 or -port=20200")
-// 	// flag.Parse()
-
-// 	// router := mux.NewRouter()
-// 	// srv := http.Server
-
-// 	// HTTP server setup
-// 	http.HandleFunc("/register", hand.Register)
-// 	http.HandleFunc("/login", hand.Login)
-
-// 	port := 20200
-// 	fmt.Printf("Server is running on port %d\n", port)
-// 	err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
-
-// 	if err != nil {
-// 		log.Fatalf("Error starting HTTP server: %v", err)
-// 	}
-// }
-
 func main() {
-	//port
+	// Port
 	var port int
-	flag.IntVar(&port, "port", 20200, "Port number for the HTTP server")
+	flag.IntVar(&port, "port", 20201, "Port number for the HTTP server")
 	flag.Parse()
 
-	//gorilla mux
+	// Gorilla Mux
 	router := mux.NewRouter()
-	//calling http handlers using mux
-	router.HandleFunc("/register", handlers.Register).Methods("POST")
-	router.HandleFunc("/login", handlers.Login).Methods("POST")
+
+	// Calling HTTP handlers using Mux
+	authRouter := router.PathPrefix("/auth").Subrouter()
+	authRouter.HandleFunc("/register", auth.Register).Methods("POST")
+	authRouter.HandleFunc("/login", auth.Login).Methods("POST")
+
+	// we are making use of subrouter so that we can pass the middleware only for admin handlers
+	adminRouter := router.PathPrefix("/admin").Subrouter()
+	adminRouter.Use(middleware.CheckUserRoleMiddleware)
+	adminRouter.HandleFunc("/create-test", admin.CreateTest).Methods("POST")
+	adminRouter.HandleFunc("/create-cat", admin.CreateCategory).Methods("POST")
+	adminRouter.HandleFunc("/create-dashboard", admin.CreateDashboard).Methods("POST")
+
+	//and this for normaluser folder
+	normalRouter := router.PathPrefix("/normaluser").Subrouter()
+	normalRouter.HandleFunc("/get-cat", normal.GetCatHandler).Methods("GET")
+	normalRouter.HandleFunc("/get-cat-by-id", normal.GetCatByIdHandler).Methods("GET")
+	normalRouter.HandleFunc("/get-test-by-cat", normal.GetTestByCatHandler).Methods("GET")
+	normalRouter.HandleFunc("/get-test-by-id", normal.GetTestByIdHandler).Methods("GET")
+	normalRouter.HandleFunc("/attend-test-by-id", normal.SubmitUserAnswersHandler).Methods("POST")
+	normalRouter.HandleFunc("/get-result", normal.CalculateAndStoreUserResult).Methods("GET")
 
 	fmt.Printf("Server is running on port %d\n", port)
 
